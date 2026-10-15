@@ -301,6 +301,55 @@ def blueprint_index(key, sql, drop=False):
     return ('$table->' + method + '(' + arr(index_parts(sql)) +
             ('' if key == 'PRIMARY' else ', ' + php(key)) + ');')
 
+def primary_implicit_in_blueprint(table):
+    """
+    Verifica se a chave primária já será criada automaticamente
+    pelo Blueprint do Laravel em uma coluna AUTO_INCREMENT.
+
+    Retorna True somente quando:
+    - Existe exatamente uma coluna AUTO_INCREMENT.
+    - Ela é a única coluna da chave primária.
+
+    Rejeita estruturas que exigem tratamento específico.
+    """
+
+    auto_columns = []
+
+    for name, definition in table['columns'].items():
+        tokens = [token.upper() for token in sql_tokens(definition)]
+
+        if 'AUTO_INCREMENT' in tokens:
+            auto_columns.append(name)
+
+    if not auto_columns:
+        return False
+
+    if len(auto_columns) > 1:
+        raise ValueError(
+            'Mais de uma coluna AUTO_INCREMENT na mesma tabela: '
+            + ', '.join(auto_columns)
+        )
+
+    primary_sql = table['indices'].get('PRIMARY')
+
+    if not primary_sql:
+        raise ValueError(
+            'Coluna AUTO_INCREMENT sem PRIMARY KEY: '
+            + auto_columns[0]
+            + '. Revisar manualmente o mapeamento Laravel.'
+        )
+
+    primary_columns = index_parts(primary_sql)
+
+    if primary_columns != auto_columns:
+        raise ValueError(
+            'A coluna AUTO_INCREMENT não corresponde à '
+            'chave primária simples: '
+            + auto_columns[0]
+            + '. Revisar manualmente a migration.'
+        )
+
+    return True
 
 # Convert stored foreign key SQL into a Blueprint foreign() chain.
 def blueprint_foreign(key, sql):
@@ -407,14 +456,35 @@ def delta(before, after):
         new = after[name]
         
         if name not in before:
+
             lines = table_options(new['options'])
-            lines += [blueprint_column(new['columns'][c]) for c in new['order']]
+
+            # Gera as colunas da tabela.
+            lines += [
+                blueprint_column(new['columns'][c])
+                for c in new['order']
+            ]
+
+            # Detecta se o AUTO_INCREMENT já cria a PRIMARY KEY.
+            primary_implicit = primary_implicit_in_blueprint(new)
+
+            # Gera os índices.
             for key in sorted(new['indices']):
-                
-                lines.append(blueprint_index(key, new['indices'][key]))
-            blocks.append(schema_block(name, lines, True))
+
+                # Não duplica a chave primária criada pelo AUTO_INCREMENT.
+                if key == 'PRIMARY' and primary_implicit:
+                    continue
+
+                lines.append(
+                    blueprint_index(key, new['indices'][key])
+                )
+
+            blocks.append(
+                schema_block(name, lines, True)
+            )
+
             continue
-        
+                
         old = before[name]
         if new['options'] != old['options']:
             raise ValueError('Changing table engine/charset/comment requires a manual migration: ' + name)
