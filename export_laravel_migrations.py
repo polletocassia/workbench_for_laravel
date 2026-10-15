@@ -303,30 +303,24 @@ def blueprint_index(key, sql, drop=False):
 
 def primary_implicit_in_blueprint(table):
     """
-    Verifica se a chave primária já será criada automaticamente
-    pelo Blueprint do Laravel em uma coluna AUTO_INCREMENT.
-
-    Retorna True somente quando:
-    - Existe exatamente uma coluna AUTO_INCREMENT.
-    - Ela é a única coluna da chave primária.
-
-    Rejeita estruturas que exigem tratamento específico.
+    Identifica quando uma PRIMARY KEY simples já será
+    criada pelo Blueprint devido ao AUTO_INCREMENT.
     """
 
     auto_columns = []
 
     for name, definition in table['columns'].items():
-        tokens = [token.upper() for token in sql_tokens(definition)]
-
-        if 'AUTO_INCREMENT' in tokens:
+        # Tokens keep quoted comments intact, so a COMMENT mentioning
+        # auto_increment is not mistaken for the column attribute.
+        if 'AUTO_INCREMENT' in [t.upper() for t in sql_tokens(definition)]:
             auto_columns.append(name)
 
     if not auto_columns:
         return False
 
-    if len(auto_columns) > 1:
+    if len(auto_columns) != 1:
         raise ValueError(
-            'Mais de uma coluna AUTO_INCREMENT na mesma tabela: '
+            'Estrutura AUTO_INCREMENT inválida: '
             + ', '.join(auto_columns)
         )
 
@@ -334,19 +328,16 @@ def primary_implicit_in_blueprint(table):
 
     if not primary_sql:
         raise ValueError(
-            'Coluna AUTO_INCREMENT sem PRIMARY KEY: '
+            'AUTO_INCREMENT sem PRIMARY KEY na coluna: '
             + auto_columns[0]
-            + '. Revisar manualmente o mapeamento Laravel.'
         )
 
     primary_columns = index_parts(primary_sql)
 
     if primary_columns != auto_columns:
         raise ValueError(
-            'A coluna AUTO_INCREMENT não corresponde à '
-            'chave primária simples: '
+            'AUTO_INCREMENT não corresponde à PRIMARY KEY simples: '
             + auto_columns[0]
-            + '. Revisar manualmente a migration.'
         )
 
     return True
@@ -454,24 +445,18 @@ def delta(before, after):
         
     for name in sorted(after):
         new = after[name]
-        
-        if name not in before:
 
+        if name not in before:
             lines = table_options(new['options'])
 
-            # Gera as colunas da tabela.
             lines += [
                 blueprint_column(new['columns'][c])
                 for c in new['order']
             ]
 
-            # Detecta se o AUTO_INCREMENT já cria a PRIMARY KEY.
             primary_implicit = primary_implicit_in_blueprint(new)
 
-            # Gera os índices.
             for key in sorted(new['indices']):
-
-                # Não duplica a chave primária criada pelo AUTO_INCREMENT.
                 if key == 'PRIMARY' and primary_implicit:
                     continue
 
@@ -479,10 +464,7 @@ def delta(before, after):
                     blueprint_index(key, new['indices'][key])
                 )
 
-            blocks.append(
-                schema_block(name, lines, True)
-            )
-
+            blocks.append(schema_block(name, lines, True))
             continue
                 
         old = before[name]
